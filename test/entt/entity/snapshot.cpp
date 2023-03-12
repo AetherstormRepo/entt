@@ -1,5 +1,6 @@
 #include <cstddef>
 #include <map>
+#include <memory>
 #include <queue>
 #include <tuple>
 #include <type_traits>
@@ -8,22 +9,6 @@
 #include <entt/entity/entity.hpp>
 #include <entt/entity/registry.hpp>
 #include <entt/entity/snapshot.hpp>
-
-struct noncopyable_component {
-    noncopyable_component()
-        : value{} {}
-
-    explicit noncopyable_component(int v)
-        : value{v} {}
-
-    noncopyable_component(const noncopyable_component &) = delete;
-    noncopyable_component(noncopyable_component &&) = default;
-
-    noncopyable_component &operator=(const noncopyable_component &) = delete;
-    noncopyable_component &operator=(noncopyable_component &&) = default;
-
-    int value;
-};
 
 template<typename Storage>
 struct output_archive {
@@ -35,8 +20,8 @@ struct output_archive {
         (std::get<std::queue<Value>>(storage).push(value), ...);
     }
 
-    void operator()(const entt::entity &entity, const noncopyable_component &instance) {
-        (*this)(entity, instance.value);
+    void operator()(const entt::entity &entity, const std::unique_ptr<int> &instance) {
+        (*this)(entity, *instance);
     }
 
 private:
@@ -59,8 +44,9 @@ struct input_archive {
         (assign(value), ...);
     }
 
-    void operator()(entt::entity &entity, noncopyable_component &instance) {
-        (*this)(entity, instance.value);
+    void operator()(entt::entity &entity, std::unique_ptr<int> &instance) {
+        instance = std::make_unique<int>();
+        (*this)(entity, *instance);
     }
 
 private:
@@ -107,7 +93,7 @@ TEST(Snapshot, Dump) {
     registry.destroy(e1);
     auto v1 = registry.current(e1);
 
-    using storage_type = std::tuple<
+    using archive_type = std::tuple<
         std::queue<typename traits_type::entity_type>,
         std::queue<entt::entity>,
         std::queue<int>,
@@ -116,9 +102,9 @@ TEST(Snapshot, Dump) {
         std::queue<a_component>,
         std::queue<another_component>>;
 
-    storage_type storage;
-    output_archive<storage_type> output{storage};
-    input_archive<storage_type> input{storage};
+    archive_type storage;
+    output_archive<archive_type> output{storage};
+    input_archive<archive_type> input{storage};
 
     entt::snapshot{registry}.entities(output).component<int, char, double, a_component, another_component>(output);
     registry.clear();
@@ -171,16 +157,16 @@ TEST(Snapshot, Partial) {
     registry.destroy(e1);
     auto v1 = registry.current(e1);
 
-    using storage_type = std::tuple<
+    using archive_type = std::tuple<
         std::queue<typename traits_type::entity_type>,
         std::queue<entt::entity>,
         std::queue<int>,
         std::queue<char>,
         std::queue<double>>;
 
-    storage_type storage;
-    output_archive<storage_type> output{storage};
-    input_archive<storage_type> input{storage};
+    archive_type storage;
+    output_archive<archive_type> output{storage};
+    input_archive<archive_type> input{storage};
 
     entt::snapshot{registry}.entities(output).component<char, int>(output);
     registry.clear();
@@ -228,29 +214,29 @@ TEST(Snapshot, Iterator) {
     for(auto i = 0; i < 50; ++i) {
         const auto entity = registry.create();
         registry.emplace<another_component>(entity, i, i);
-        registry.emplace<noncopyable_component>(entity, i);
+        registry.emplace<std::unique_ptr<int>>(entity, std::make_unique<int>(i));
 
         if(i % 2) {
             registry.emplace<a_component>(entity);
         }
     }
 
-    using storage_type = std::tuple<
+    using archive_type = std::tuple<
         std::queue<typename traits_type::entity_type>,
         std::queue<entt::entity>,
         std::queue<another_component>,
         std::queue<int>>;
 
-    storage_type storage;
-    output_archive<storage_type> output{storage};
-    input_archive<storage_type> input{storage};
+    archive_type storage;
+    output_archive<archive_type> output{storage};
+    input_archive<archive_type> input{storage};
 
     const auto view = registry.view<a_component>();
     const auto size = view.size();
 
-    entt::snapshot{registry}.component<another_component, noncopyable_component>(output, view.begin(), view.end());
+    entt::snapshot{registry}.component<another_component, std::unique_ptr<int>>(output, view.begin(), view.end());
     registry.clear();
-    entt::snapshot_loader{registry}.component<another_component, noncopyable_component>(input);
+    entt::snapshot_loader{registry}.component<another_component, std::unique_ptr<int>>(input);
 
     ASSERT_EQ(registry.view<another_component>().size(), size);
 
@@ -270,7 +256,7 @@ TEST(Snapshot, Continuous) {
     std::vector<entt::entity> entities;
     entt::entity entity;
 
-    using storage_type = std::tuple<
+    using archive_type = std::tuple<
         std::queue<typename traits_type::entity_type>,
         std::queue<entt::entity>,
         std::queue<another_component>,
@@ -279,9 +265,9 @@ TEST(Snapshot, Continuous) {
         std::queue<int>,
         std::queue<double>>;
 
-    storage_type storage;
-    output_archive<storage_type> output{storage};
-    input_archive<storage_type> input{storage};
+    archive_type storage;
+    output_archive<archive_type> output{storage};
+    input_archive<archive_type> input{storage};
 
     for(int i = 0; i < 10; ++i) {
         static_cast<void>(src.create());
@@ -295,7 +281,7 @@ TEST(Snapshot, Continuous) {
 
         src.emplace<a_component>(entity);
         src.emplace<another_component>(entity, i, i);
-        src.emplace<noncopyable_component>(entity, i);
+        src.emplace<std::unique_ptr<int>>(entity, std::make_unique<int>(i));
 
         if(i % 2) {
             src.emplace<what_a_component>(entity, entity);
@@ -319,12 +305,12 @@ TEST(Snapshot, Continuous) {
     entity = dst.create();
     dst.emplace<a_component>(entity);
     dst.emplace<another_component>(entity, -1, -1);
-    dst.emplace<noncopyable_component>(entity, -1);
+    dst.emplace<std::unique_ptr<int>>(entity, std::make_unique<int>(-1));
 
-    entt::snapshot{src}.entities(output).component<a_component, another_component, what_a_component, map_component, noncopyable_component>(output);
+    entt::snapshot{src}.entities(output).component<a_component, another_component, what_a_component, map_component, std::unique_ptr<int>>(output);
 
     loader.entities(input)
-        .component<a_component, another_component, what_a_component, map_component, noncopyable_component>(
+        .component<a_component, another_component, what_a_component, map_component, std::unique_ptr<int>>(
             input,
             &what_a_component::bar,
             &what_a_component::quux,
@@ -337,7 +323,7 @@ TEST(Snapshot, Continuous) {
     decltype(dst.size()) another_component_cnt{};
     decltype(dst.size()) what_a_component_cnt{};
     decltype(dst.size()) map_component_cnt{};
-    decltype(dst.size()) noncopyable_component_cnt{};
+    decltype(dst.size()) unique_ptr_cnt{};
 
     dst.each([&dst, &a_component_cnt](auto entt) {
         ASSERT_TRUE(dst.all_of<a_component>(entt));
@@ -376,9 +362,9 @@ TEST(Snapshot, Continuous) {
         ++map_component_cnt;
     });
 
-    dst.view<noncopyable_component>().each([&dst, &noncopyable_component_cnt](auto, const auto &component) {
-        ++noncopyable_component_cnt;
-        ASSERT_EQ(component.value, static_cast<int>(dst.storage<noncopyable_component>().size() - noncopyable_component_cnt - 1u));
+    dst.view<std::unique_ptr<int>>().each([&dst, &unique_ptr_cnt](auto, const auto &component) {
+        ++unique_ptr_cnt;
+        ASSERT_EQ(*component, static_cast<int>(dst.storage<std::unique_ptr<int>>().size() - unique_ptr_cnt - 1u));
     });
 
     src.view<another_component>().each([](auto, auto &component) {
@@ -405,7 +391,7 @@ TEST(Snapshot, Continuous) {
     ASSERT_EQ(dst.storage<another_component>().size(), another_component_cnt);
     ASSERT_EQ(dst.storage<what_a_component>().size(), what_a_component_cnt);
     ASSERT_EQ(dst.storage<map_component>().size(), map_component_cnt);
-    ASSERT_EQ(dst.storage<noncopyable_component>().size(), noncopyable_component_cnt);
+    ASSERT_EQ(dst.storage<std::unique_ptr<int>>().size(), unique_ptr_cnt);
 
     dst.view<another_component>().each([](auto, auto &component) {
         ASSERT_EQ(component.value, component.key < 0 ? -1 : (2 * component.key));
@@ -509,13 +495,13 @@ TEST(Snapshot, MoreOnShrink) {
 
     entt::continuous_loader loader{dst};
 
-    using storage_type = std::tuple<
+    using archive_type = std::tuple<
         std::queue<typename traits_type::entity_type>,
         std::queue<entt::entity>>;
 
-    storage_type storage;
-    output_archive<storage_type> output{storage};
-    input_archive<storage_type> input{storage};
+    archive_type storage;
+    output_archive<archive_type> output{storage};
+    input_archive<archive_type> input{storage};
 
     auto entity = src.create();
     entt::snapshot{src}.entities(output);
@@ -536,15 +522,15 @@ TEST(Snapshot, SyncDataMembers) {
 
     entt::continuous_loader loader{dst};
 
-    using storage_type = std::tuple<
+    using archive_type = std::tuple<
         std::queue<typename traits_type::entity_type>,
         std::queue<entt::entity>,
         std::queue<what_a_component>,
         std::queue<map_component>>;
 
-    storage_type storage;
-    output_archive<storage_type> output{storage};
-    input_archive<storage_type> input{storage};
+    archive_type storage;
+    output_archive<archive_type> output{storage};
+    input_archive<archive_type> input{storage};
 
     static_cast<void>(src.create());
     static_cast<void>(src.create());
